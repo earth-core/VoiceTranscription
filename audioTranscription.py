@@ -6,7 +6,9 @@ import webrtcvad
 import pyaudio
 import time
 from faster_whisper import WhisperModel
-import numpy as np 
+import numpy as np
+from tkinter import Tk
+import tkgui
 
 
 INT16_MAX_VALUE = 32768.0
@@ -20,11 +22,12 @@ format = '%(asctime)s: %(levelname)s: \
 
 
 class audioTranscription:
-    def __init__(self,q):
+    def __init__(self,q,q2):
         self.shutdown_event = mp.Event()
         self.is_working = mp.Event()
         self.is_working.set()
         self.q1 = q
+        self.q2 = q2
         self.audio_process=None
         self.transcription_process=None
 
@@ -45,7 +48,7 @@ class audioTranscription:
             audio = bytearray()
             count=0
             try:
-                while  self.is_working.is_set():
+                while  self.is_working:
                     data = stream.read(BUFFER_SIZE)
                     audio.extend(data)
                     ##
@@ -73,24 +76,29 @@ class audioTranscription:
             logging.info("Whisper model initialized")
             try:
                 voice = bytearray()
-                count = 0
-                while  self.is_working.is_set():
+                getFive = 5
+                while  self.is_working:
                     if self.q1.qsize() > 5:
-                        x = self.q1.get()
-                        voice.extend(x)
-                        count += 1
-                    if count > 5:
-                        count=0
+                        while getFive != 0:
+                            x = self.q1.get()
+                            voice.extend(x)
+                            getFive -= 1
+                        getFive = 5
                         try:
-                            v = np.frombuffer(voice,dtype=np.int16)
-                            v1 = v.astype(np.float32)/INT16_MAX_VALUE
-                            seg,info = model_t.transcribe(v1)
-                            for s in seg:
-                                print("[%.2fs -> %.2fs] %s" 
-                                % (s.start, s.end, s.text))
+                            if len(voice) > 4:
+                                v = np.frombuffer(voice,dtype=np.int16)
+                                voice.clear()
+                                v1 = v.astype(np.float32)/INT16_MAX_VALUE
+                                seg,info = model_t.transcribe(v1)
+                                strT = ''
+                                for s in seg:
+                                    print("[%.2fs -> %.2fs] %s" 
+                                    % (s.start, s.end, s.text))
+                                    strT.join(s.text)
+                                self.q2.put(strT)
+                                strT = ''
                         except Exception as e:
                             logging.exception("Error in transcription %s",e)
-                        voice=bytearray()                
             except Exception as e:
                 logging.exception("Error in transcribing %s",e)
                 
@@ -116,9 +124,13 @@ class audioTranscription:
         self.shutdown_event.set()
         self.is_working.clear()
         logging.info("Set the Shutdown Event to set")
-        self.transcription_process.join()
-        self.audio_process.join()
-        print("both joined, ending... ")
+        print("Is audio_process alive",self.audio_process.is_alive())
+        #if self.audio_process.is_alive(): self.audio_process.terminate()
+        self.audio_process.join(1)
+        print("is Transcript alive",self.transcription_process.is_alive())
+        if self.transcription_process.is_alive() : self.transcription_process.terminate()
+        self.transcription_process.join(1)
+        print("both likely joined[timeout], ending... ")
 
 
 
@@ -129,17 +141,19 @@ if __name__ == '__main__' :
     mp.set_start_method('fork')
     logger = logging.getLogger(__name__)
     logging.basicConfig(filename='audioTrans.log',format=format,
-    					filemode='w',level=logging.DEBUG)
+                          filemode='w',level=logging.DEBUG)
     q=mp.Queue()
-    a = audioTranscription(q)
-    
+    q2=mp.Queue()
+    a = audioTranscription(q,q2)
+    root = Tk()
+    b = tkgui.ViewTranscript(root,q2)
     try:
         a.start_process()
-        time.sleep(2)
-        x = input("Waiting for 'END' command ... ")
-        if str(x) == 'end' or 'End' or 'END':
-            a.shutdown()
+        root.mainloop()
     except KeyboardInterrupt:
+        root.destroy()
+    finally:
         a.shutdown()
+    
     print("Out of Try Blocks Main ,Quit")
     
